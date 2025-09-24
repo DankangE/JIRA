@@ -64,8 +64,8 @@ jobs:
         with:
           ref: main
 
-      - name: Create branch with Ticket number and branch name
+      - name: Create branch with Parent Key and branch name
         run: |
-          BRANCH_NAME="${{ steps.create.outputs.issue }}-gh${{ github.event.issue.number }}-${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_parentKey }}-${{ steps.issue-parser.outputs.issueparser_branchName }}"
           git checkout -b "${BRANCH_NAME}"
           git push origin "${BRANCH_NAME}"
