@@ -17,7 +17,7 @@ body:
     attributes:
       label: '브랜치 이름(Branch Name)'
       description: '생성될 브랜치 이름을 작성해주세요'
-      placeholder: 'test-00-Feat/issue'
+      placeholder: 'Feat/issue'
     validations:
       required: true
 
