@@ -64,14 +64,8 @@ jobs:
         with:
           ref: main
 
-      - name: Create branch with Ticket number and issue title
+      - name: Create branch with Ticket number and branch name
         run: |
-          # Sanitize the issue title for branch naming
-          SANITIZED_TITLE=$(echo "${{ github.event.issue.title }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-50)
-          # Ensure branch name doesn't start with number or hyphen
-          if [[ "${SANITIZED_TITLE}" =~ ^[0-9-] ]]; then
-            SANITIZED_TITLE="issue-${SANITIZED_TITLE}"
-          fi
-          BRANCH_NAME="${{ steps.issue-parser.outputs.branchName }}-${SANITIZED_TITLE}"
+          BRANCH_NAME="${{ steps.create.outputs.issue }}-${{ steps.issue-parser.outputs.issueparser_branchName }}"
           git checkout -b "${BRANCH_NAME}"
           git push origin "${BRANCH_NAME}"
