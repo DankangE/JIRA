@@ -23,11 +23,14 @@ jobs:
 
       - name: Find and delete branch
         run: |
-          # Get the branch name pattern from issue parser
-          BRANCH_PATTERN="*-${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          # Use GitHub issue number to find associated branches
+          # Pattern: any branch containing the GitHub issue number and branch name
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
           
-          # Find branches matching the pattern
-          MATCHING_BRANCHES=$(git branch -r | grep -E "origin/${BRANCH_PATTERN}" | sed 's/origin\///' | xargs)
+          # Find branches that contain both issue number and branch name
+          # This handles cases where JIRA ticket number might vary
+          MATCHING_BRANCHES=$(git branch -r | grep -E "origin/.*${ISSUE_NUMBER}.*${BRANCH_NAME}" | sed 's/origin\///' | sed 's/^ *//' | xargs)
           
           if [ -n "$MATCHING_BRANCHES" ]; then
             for BRANCH in $MATCHING_BRANCHES; do
@@ -35,7 +38,16 @@ jobs:
               git push origin --delete "$BRANCH" || echo "Failed to delete branch $BRANCH or branch already deleted"
             done
           else
-            echo "No matching branches found for pattern: $BRANCH_PATTERN"
+            echo "No matching branches found for issue #${ISSUE_NUMBER} with branch name: ${BRANCH_NAME}"
+            # Fallback: try to find any branch with the branch name
+            FALLBACK_BRANCHES=$(git branch -r | grep -E "origin/.*${BRANCH_NAME}" | sed 's/origin\///' | sed 's/^ *//' | xargs)
+            if [ -n "$FALLBACK_BRANCHES" ]; then
+              echo "Found fallback branches: $FALLBACK_BRANCHES"
+              for BRANCH in $FALLBACK_BRANCHES; do
+                echo "Deleting fallback branch: $BRANCH"
+                git push origin --delete "$BRANCH" || echo "Failed to delete branch $BRANCH or branch already deleted"
+              done
+            fi
           fi
 
       - name: Log completion
