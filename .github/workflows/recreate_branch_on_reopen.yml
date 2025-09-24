@@ -28,46 +28,37 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
-      - name: Find existing Jira issue
-        id: find-jira
-        run: |
-          # Search for existing Jira issue linked to this GitHub issue
-          # This is a simplified approach - you might need to adjust based on your Jira setup
-          GITHUB_ISSUE_URL="${{ github.event.issue.html_url }}"
-          echo "Looking for Jira issue linked to: $GITHUB_ISSUE_URL"
-          
-          # For now, we'll use the parent key from the issue form as the base
-          # In a real scenario, you might want to search Jira for issues containing the GitHub URL
-          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
-          echo "Using parent key: $PARENT_KEY"
-          echo "parent_key=$PARENT_KEY" >> $GITHUB_OUTPUT
-
       - name: Recreate branch
         run: |
           ISSUE_NUMBER="${{ github.event.issue.number }}"
           BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
-          PARENT_KEY="${{ steps.find-jira.outputs.parent_key }}"
           
-          # Create branch name in the same format as original creation
-          # Format: {PARENT_KEY}-gh{ISSUE_NUMBER}-{BRANCH_NAME}
-          FULL_BRANCH_NAME="${PARENT_KEY}-gh${ISSUE_NUMBER}-${BRANCH_NAME}"
+          # Find the original JIRA ticket number from existing branches
+          # Look for branches that contain this GitHub issue number and branch name
+          EXISTING_BRANCH=$(git branch -r | grep -E "origin/.*gh${ISSUE_NUMBER}.*${BRANCH_NAME}" | head -1 | sed 's/origin\///' | sed 's/^ *//')
+          
+          if [ -n "$EXISTING_BRANCH" ]; then
+            # Extract JIRA ticket from existing branch name (format: JIRA-123-gh45-branchname)
+            JIRA_TICKET=$(echo "$EXISTING_BRANCH" | sed -E 's/-gh[0-9]+-.*//')
+            RECREATED_BRANCH_NAME="${JIRA_TICKET}-${BRANCH_NAME}"
+            echo "Found previous branch: $EXISTING_BRANCH"
+            echo "Will recreate as: $RECREATED_BRANCH_NAME"
+          else
+            # Fallback: use parent key from issue form
+            PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
+            RECREATED_BRANCH_NAME="${PARENT_KEY}-${BRANCH_NAME}"
+            echo "No previous branch found, using parent key: $RECREATED_BRANCH_NAME"
+          fi
           
           # Check if branch already exists
-          if git show-ref --verify --quiet refs/remotes/origin/$FULL_BRANCH_NAME; then
-            echo "Branch $FULL_BRANCH_NAME already exists, skipping creation"
+          if git show-ref --verify --quiet refs/remotes/origin/$RECREATED_BRANCH_NAME; then
+            echo "Branch $RECREATED_BRANCH_NAME already exists, skipping creation"
           else
-            echo "Creating branch: $FULL_BRANCH_NAME"
-            git checkout -b "$FULL_BRANCH_NAME"
-            git push origin "$FULL_BRANCH_NAME"
-            echo "Successfully created branch: $FULL_BRANCH_NAME"
+            echo "Creating branch: $RECREATED_BRANCH_NAME"
+            git checkout -b "$RECREATED_BRANCH_NAME"
+            git push origin "$RECREATED_BRANCH_NAME"
+            echo "Successfully created branch: $RECREATED_BRANCH_NAME"
           fi
-
-      - name: Reopen Jira issue if needed
-        uses: atlassian/gajira-transition@v3
-        with:
-          issue: ${{ steps.find-jira.outputs.parent_key }}
-          transition: "To Do"
-        continue-on-error: true
 
       - name: Log completion
         run: |
