@@ -39,4 +39,5 @@ jobs:
           fi
 
       - name: Log completion
-        run: echo "Branch deletion workflow completed for issue #${{ github.event.issue.number }}"
+        run: |
+          echo "Branch deletion workflow completed for issue #${{ github.event.issue.number }}"
