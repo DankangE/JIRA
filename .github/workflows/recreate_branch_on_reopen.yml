@@ -1,0 +1,74 @@
+name: Recreate branch on issue reopen
+on:
+  issues:
+    types:
+      - reopened
+
+jobs:
+  recreate-branch:
+    name: Recreate branch for reopened issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Jira
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+
+      - name: Checkout main code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Issue Parser
+        uses: stefanbuck/github-issue-praser@v3
+        id: issue-parser
+        with:
+          template-path: .github/ISSUE_TEMPLATE/issue_form.yml
+
+      - name: Find existing Jira issue
+        id: find-jira
+        run: |
+          # Search for existing Jira issue linked to this GitHub issue
+          # This is a simplified approach - you might need to adjust based on your Jira setup
+          GITHUB_ISSUE_URL="${{ github.event.issue.html_url }}"
+          echo "Looking for Jira issue linked to: $GITHUB_ISSUE_URL"
+          
+          # For now, we'll use the parent key from the issue form as the base
+          # In a real scenario, you might want to search Jira for issues containing the GitHub URL
+          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
+          echo "Using parent key: $PARENT_KEY"
+          echo "parent_key=$PARENT_KEY" >> $GITHUB_OUTPUT
+
+      - name: Recreate branch
+        run: |
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          PARENT_KEY="${{ steps.find-jira.outputs.parent_key }}"
+          
+          # Create branch name in the same format as original creation
+          # Format: {PARENT_KEY}-gh{ISSUE_NUMBER}-{BRANCH_NAME}
+          FULL_BRANCH_NAME="${PARENT_KEY}-gh${ISSUE_NUMBER}-${BRANCH_NAME}"
+          
+          # Check if branch already exists
+          if git show-ref --verify --quiet refs/remotes/origin/$FULL_BRANCH_NAME; then
+            echo "Branch $FULL_BRANCH_NAME already exists, skipping creation"
+          else
+            echo "Creating branch: $FULL_BRANCH_NAME"
+            git checkout -b "$FULL_BRANCH_NAME"
+            git push origin "$FULL_BRANCH_NAME"
+            echo "Successfully created branch: $FULL_BRANCH_NAME"
+          fi
+
+      - name: Reopen Jira issue if needed
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ steps.find-jira.outputs.parent_key }}
+          transition: "To Do"
+        continue-on-error: true
+
+      - name: Log completion
+        run: |
+          echo "Branch recreation workflow completed for reopened issue #${{ github.event.issue.number }}"
