@@ -21,6 +21,41 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
+      - name: Close Jira issue
+        run: |
+          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
+          
+          echo "Closing Jira issue: $PARENT_KEY"
+          
+          # Get transition ID for "완료" status
+          TRANSITIONS_RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+            -H "Accept: application/json" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$PARENT_KEY/transitions")
+          
+          echo "Available transitions: $TRANSITIONS_RESPONSE"
+          
+          # Find transition ID for "완료" or "Done"
+          DONE_TRANSITION_ID=$(echo "$TRANSITIONS_RESPONSE" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done" or .to.name == "완료" or .to.name == "Done") | .id' | head -1)
+          
+          if [ "$DONE_TRANSITION_ID" != "null" ] && [ -n "$DONE_TRANSITION_ID" ]; then
+            echo "Found transition ID: $DONE_TRANSITION_ID"
+            
+            # Transition the issue to "완료"
+            TRANSITION_RESPONSE=$(curl -s -X POST \
+              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\":{\"id\":\"$DONE_TRANSITION_ID\"}}" \
+              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$PARENT_KEY/transitions")
+            
+            echo "Jira issue $PARENT_KEY transitioned to 완료"
+          else
+            echo "::warning::Could not find '완료' or 'Done' transition for issue $PARENT_KEY"
+            echo "Available transitions response: $TRANSITIONS_RESPONSE"
+          fi
+        continue-on-error: true
+
       - name: Find and delete branch
         run: |
           # Get issue information
