@@ -66,6 +66,8 @@ jobs:
 
       - name: Create branch with Parent Key and branch name
         run: |
-          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_parentKey }}-${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          ISSUE_NUMBER="${{ steps.create.outputs.issue }}"
+          ISSUE_TITLE="${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          BRANCH_NAME="${ISSUE_NUMBER}-$(echo ${ISSUE_TITLE} | sed 's/ /-/g')"
           git checkout -b "${BRANCH_NAME}"
           git push origin "${BRANCH_NAME}"

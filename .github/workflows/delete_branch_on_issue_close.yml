@@ -21,6 +21,13 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
+      - name: Close Jira issue
+        uses: atlassian/gajira-close@v3
+        with:
+          issue: ${{ steps.issue-parser.outputs.issueparser_parentKey }}
+          # comment: "Issue closed by GitHub Actions"
+          transition: "Done"
+
       - name: Find and delete branch
         run: |
           # Get issue information
