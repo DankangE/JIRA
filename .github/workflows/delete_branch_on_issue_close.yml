@@ -21,49 +21,39 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
-      - name: Close Jira issue
-        uses: atlassian/gajira-close@v3
-        with:
-          issue: ${{ steps.issue-parser.outputs.issueparser_parentKey }}
-          # comment: "Issue closed by GitHub Actions"
-          transition: "Done"
-
       - name: Find and delete branch
         run: |
           # Get issue information
           ISSUE_NUMBER="${{ github.event.issue.number }}"
           BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
-          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
           
           echo "Looking for branches with:"
-          echo "- Parent Key: $PARENT_KEY"
-          echo "- Branch Name: $BRANCH_NAME"
           echo "- Issue Number: $ISSUE_NUMBER"
+          echo "- Branch Name: $BRANCH_NAME"
           
-          # Find exact match: PARENT_KEY-BRANCH_NAME or PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME
-          EXACT_BRANCH_1="${PARENT_KEY}-${BRANCH_NAME}"
-          EXACT_BRANCH_2="${PARENT_KEY}-gh${ISSUE_NUMBER}-${BRANCH_NAME}"
+          # Find branches that match the pattern: {JIRA_TICKET}-{SANITIZED_BRANCH_NAME}
+          # The branch name format from creation: {ISSUE_NUMBER}-{SANITIZED_BRANCH_NAME}
+          SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/ /-/g')
+          TARGET_BRANCH_PATTERN="${ISSUE_NUMBER}-${SANITIZED_BRANCH}"
+          
+          echo "Looking for branch pattern: $TARGET_BRANCH_PATTERN"
           
           BRANCHES_DELETED=0
           
-          # Check for exact branch name (PARENT_KEY-BRANCH_NAME)
-          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_1; then
-            echo "Found exact match branch: $EXACT_BRANCH_1"
-            git push origin --delete "$EXACT_BRANCH_1" && echo "Successfully deleted: $EXACT_BRANCH_1" || echo "Failed to delete: $EXACT_BRANCH_1"
-            BRANCHES_DELETED=1
-          fi
+          # Find branches that match the exact pattern
+          MATCHING_BRANCHES=$(git branch -r | grep -E "origin/${TARGET_BRANCH_PATTERN}$" | sed 's/origin\///' | sed 's/^ *//' | xargs)
           
-          # Check for GitHub issue tagged branch (PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME)
-          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_2; then
-            echo "Found GitHub tagged branch: $EXACT_BRANCH_2"
-            git push origin --delete "$EXACT_BRANCH_2" && echo "Successfully deleted: $EXACT_BRANCH_2" || echo "Failed to delete: $EXACT_BRANCH_2"
-            BRANCHES_DELETED=1
+          if [ -n "$MATCHING_BRANCHES" ]; then
+            for BRANCH in $MATCHING_BRANCHES; do
+              echo "Found matching branch: $BRANCH"
+              git push origin --delete "$BRANCH" && echo "Successfully deleted: $BRANCH" || echo "Failed to delete: $BRANCH"
+              BRANCHES_DELETED=1
+            done
           fi
           
           # If no exact matches found, report and continue
           if [ $BRANCHES_DELETED -eq 0 ]; then
-            echo "::warning::No matching branch found for Parent Key: $PARENT_KEY, Branch Name: $BRANCH_NAME"
-            echo "Expected branches: $EXACT_BRANCH_1 or $EXACT_BRANCH_2"
+            echo "::warning::No matching branch found for pattern: $TARGET_BRANCH_PATTERN"
             echo "This issue will be closed without branch deletion."
           else
             echo "Branch deletion completed successfully."
