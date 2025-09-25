@@ -21,74 +21,42 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
-      - name: Close Jira issue
-        run: |
-          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
-          
-          echo "Closing Jira issue: $PARENT_KEY"
-          
-          # Get transition ID for "완료" status
-          TRANSITIONS_RESPONSE=$(curl -s -X GET \
-            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-            -H "Accept: application/json" \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$PARENT_KEY/transitions")
-          
-          echo "Available transitions: $TRANSITIONS_RESPONSE"
-          
-          # Find transition ID for "완료" or "Done"
-          DONE_TRANSITION_ID=$(echo "$TRANSITIONS_RESPONSE" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done" or .to.name == "완료" or .to.name == "Done") | .id' | head -1)
-          
-          if [ "$DONE_TRANSITION_ID" != "null" ] && [ -n "$DONE_TRANSITION_ID" ]; then
-            echo "Found transition ID: $DONE_TRANSITION_ID"
-            
-            # Transition the issue to "완료"
-            TRANSITION_RESPONSE=$(curl -s -X POST \
-              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-              -H "Accept: application/json" \
-              -H "Content-Type: application/json" \
-              -d "{\"transition\":{\"id\":\"$DONE_TRANSITION_ID\"}}" \
-              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$PARENT_KEY/transitions")
-            
-            echo "Jira issue $PARENT_KEY transitioned to 완료"
-          else
-            echo "::warning::Could not find '완료' or 'Done' transition for issue $PARENT_KEY"
-            echo "Available transitions response: $TRANSITIONS_RESPONSE"
-          fi
-        continue-on-error: true
-
       - name: Find and delete branch
         run: |
           # Get issue information
           ISSUE_NUMBER="${{ github.event.issue.number }}"
           BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
           
           echo "Looking for branches with:"
-          echo "- Issue Number: $ISSUE_NUMBER"
+          echo "- Parent Key: $PARENT_KEY"
           echo "- Branch Name: $BRANCH_NAME"
+          echo "- Issue Number: $ISSUE_NUMBER"
           
-          # Find branches that match the pattern: {JIRA_TICKET}-{SANITIZED_BRANCH_NAME}
-          # The branch name format from creation: {ISSUE_NUMBER}-{SANITIZED_BRANCH_NAME}
-          SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/ /-/g')
-          TARGET_BRANCH_PATTERN="${ISSUE_NUMBER}-${SANITIZED_BRANCH}"
-          
-          echo "Looking for branch pattern: $TARGET_BRANCH_PATTERN"
+          # Find exact match: PARENT_KEY-BRANCH_NAME or PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME
+          EXACT_BRANCH_1="${PARENT_KEY}-${BRANCH_NAME}"
+          EXACT_BRANCH_2="${PARENT_KEY}-gh${ISSUE_NUMBER}-${BRANCH_NAME}"
           
           BRANCHES_DELETED=0
           
-          # Find branches that match the exact pattern
-          MATCHING_BRANCHES=$(git branch -r | grep -E "origin/${TARGET_BRANCH_PATTERN}$" | sed 's/origin\///' | sed 's/^ *//' | xargs)
+          # Check for exact branch name (PARENT_KEY-BRANCH_NAME)
+          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_1; then
+            echo "Found exact match branch: $EXACT_BRANCH_1"
+            git push origin --delete "$EXACT_BRANCH_1" && echo "Successfully deleted: $EXACT_BRANCH_1" || echo "Failed to delete: $EXACT_BRANCH_1"
+            BRANCHES_DELETED=1
+          fi
           
-          if [ -n "$MATCHING_BRANCHES" ]; then
-            for BRANCH in $MATCHING_BRANCHES; do
-              echo "Found matching branch: $BRANCH"
-              git push origin --delete "$BRANCH" && echo "Successfully deleted: $BRANCH" || echo "Failed to delete: $BRANCH"
-              BRANCHES_DELETED=1
-            done
+          # Check for GitHub issue tagged branch (PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME)
+          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_2; then
+            echo "Found GitHub tagged branch: $EXACT_BRANCH_2"
+            git push origin --delete "$EXACT_BRANCH_2" && echo "Successfully deleted: $EXACT_BRANCH_2" || echo "Failed to delete: $EXACT_BRANCH_2"
+            BRANCHES_DELETED=1
           fi
           
           # If no exact matches found, report and continue
           if [ $BRANCHES_DELETED -eq 0 ]; then
-            echo "::warning::No matching branch found for pattern: $TARGET_BRANCH_PATTERN"
+            echo "::warning::No matching branch found for Parent Key: $PARENT_KEY, Branch Name: $BRANCH_NAME"
+            echo "Expected branches: $EXACT_BRANCH_1 or $EXACT_BRANCH_2"
             echo "This issue will be closed without branch deletion."
           else
             echo "Branch deletion completed successfully."
