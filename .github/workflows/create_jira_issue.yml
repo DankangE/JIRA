@@ -49,6 +49,7 @@ jobs:
           issuetype: 하위 작업
           summary: "${{ github.event.issue.title }}"
           description: "${{ steps.md2jira.outputs.output-text }}"
+          transition: "진행 중"
           fields: |
             {
               "parent": {

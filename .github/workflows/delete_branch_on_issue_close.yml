@@ -21,6 +21,64 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/issue_form.yml
 
+      - name: Login to Jira
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+
+      - name: Find and close matching Jira issue
+        run: |
+          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
+          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
+          GITHUB_ISSUE_TITLE="${{ github.event.issue.title }}"
+          
+          echo "Looking for Jira issue with branch name: $BRANCH_NAME"
+          echo "Under parent: $PARENT_KEY"
+          
+          # Search for child issues under the parent with matching title
+          SEARCH_RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+            -H "Accept: application/json" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/search?jql=parent=$PARENT_KEY AND summary~\"$GITHUB_ISSUE_TITLE\"")
+          
+          # Extract the issue key from search results
+          CHILD_ISSUE_KEY=$(echo "$SEARCH_RESPONSE" | jq -r '.issues[0].key // empty')
+          
+          if [ -n "$CHILD_ISSUE_KEY" ] && [ "$CHILD_ISSUE_KEY" != "null" ]; then
+            echo "Found matching Jira issue: $CHILD_ISSUE_KEY"
+            
+            # Get available transitions
+            TRANSITIONS_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+              -H "Accept: application/json" \
+              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$CHILD_ISSUE_KEY/transitions")
+            
+            # Find transition ID for "완료" or "Done"
+            DONE_TRANSITION_ID=$(echo "$TRANSITIONS_RESPONSE" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done" or .to.name == "완료" or .to.name == "Done") | .id' | head -1)
+            
+            if [ "$DONE_TRANSITION_ID" != "null" ] && [ -n "$DONE_TRANSITION_ID" ]; then
+              echo "Transitioning issue $CHILD_ISSUE_KEY to 완료 (transition ID: $DONE_TRANSITION_ID)"
+              
+              # Transition the issue to "완료"
+              curl -s -X POST \
+                -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+                -H "Accept: application/json" \
+                -H "Content-Type: application/json" \
+                -d "{\"transition\":{\"id\":\"$DONE_TRANSITION_ID\"}}" \
+                "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$CHILD_ISSUE_KEY/transitions"
+              
+              echo "Successfully transitioned Jira issue $CHILD_ISSUE_KEY to 완료"
+            else
+              echo "::warning::Could not find '완료' transition for issue $CHILD_ISSUE_KEY"
+            fi
+          else
+            echo "::warning::No matching Jira issue found for branch: $BRANCH_NAME under parent: $PARENT_KEY"
+          fi
+        continue-on-error: true
+          
+
       - name: Find and delete branch
         run: |
           # Get issue information
