@@ -1,125 +1,76 @@
-name: Delete branch on issue close
+name: Close Jira + Delete branch
 on:
   issues:
     types:
       - closed
 
 jobs:
-  delete-branch:
-    name: Delete associated branch
+  close-and-clean:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
-      - name: Issue Parser
-        uses: stefanbuck/github-issue-praser@v3
-        id: issue-parser
-        with:
-          template-path: .github/ISSUE_TEMPLATE/issue_form.yml
+      - name: Delete branch
+        run: |
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
 
-      - name: Login to Jira
-        uses: atlassian/gajira-login@v3
+          # 브랜치 네이밍 규칙 가정: issue-{번호} 또는 issue-{번호}-{설명}
+          BRANCH_1="issue-${ISSUE_NUMBER}"
+          BRANCH_2="issue-${ISSUE_NUMBER}-${ISSUE_TITLE// /-}"
+
+          echo "Searching for possible branches: $BRANCH_1 or $BRANCH_2"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH_1"; then
+            git push origin --delete "$BRANCH_1"
+            echo "Deleted $BRANCH_1"
+          elif git ls-remote --exit-code --heads origin "$BRANCH_2"; then
+            git push origin --delete "$BRANCH_2"
+            echo "Deleted $BRANCH_2"
+          else
+            echo "::warning::No branch found for issue #$ISSUE_NUMBER"
+          fi
+
+      - name: Transition Jira issue to 완료
+        run: |
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+
+          # 이슈 제목이 지라 summary와 동일하다고 가정
+          RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+            -H "Accept: application/json" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/search?jql=summary~\"$ISSUE_TITLE\"")
+
+          JIRA_KEY=$(echo "$RESPONSE" | jq -r '.issues[0].key // empty')
+
+          if [ -z "$JIRA_KEY" ]; then
+            echo "::warning::No Jira issue found for title: $ISSUE_TITLE"
+            exit 0
+          fi
+
+          echo "Found Jira issue: $JIRA_KEY"
+
+          TRANSITIONS=$(curl -s -X GET \
+            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+            -H "Accept: application/json" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$JIRA_KEY/transitions")
+
+          DONE_ID=$(echo "$TRANSITIONS" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done") | .id' | head -1)
+
+          if [ -n "$DONE_ID" ]; then
+            curl -s -X POST \
+              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\":{\"id\":\"$DONE_ID\"}}" \
+              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$JIRA_KEY/transitions"
+            echo "Jira issue $JIRA_KEY transitioned to 완료"
+          else
+            echo "::warning::No '완료' transition available for $JIRA_KEY"
+          fi
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
-
-      - name: Find and close matching Jira issue
-        run: |
-          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
-          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
-          GITHUB_ISSUE_TITLE="${{ github.event.issue.title }}"
-          
-          echo "Looking for Jira issue with branch name: $BRANCH_NAME"
-          echo "Under parent: $PARENT_KEY"
-          
-          # Search for child issues under the parent with matching title
-          SEARCH_RESPONSE=$(curl -s -X GET \
-            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-            -H "Accept: application/json" \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/search?jql=parent=$PARENT_KEY AND summary~\"$GITHUB_ISSUE_TITLE\"")
-          
-          # Extract the issue key from search results
-          CHILD_ISSUE_KEY=$(echo "$SEARCH_RESPONSE" | jq -r '.issues[0].key // empty')
-          
-          if [ -n "$CHILD_ISSUE_KEY" ] && [ "$CHILD_ISSUE_KEY" != "null" ]; then
-            echo "Found matching Jira issue: $CHILD_ISSUE_KEY"
-            
-            # Get available transitions
-            TRANSITIONS_RESPONSE=$(curl -s -X GET \
-              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-              -H "Accept: application/json" \
-              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$CHILD_ISSUE_KEY/transitions")
-            
-            # Find transition ID for "완료" or "Done"
-            DONE_TRANSITION_ID=$(echo "$TRANSITIONS_RESPONSE" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done" or .to.name == "완료" or .to.name == "Done") | .id' | head -1)
-            
-            if [ "$DONE_TRANSITION_ID" != "null" ] && [ -n "$DONE_TRANSITION_ID" ]; then
-              echo "Transitioning issue $CHILD_ISSUE_KEY to 완료 (transition ID: $DONE_TRANSITION_ID)"
-              
-              # Transition the issue to "완료"
-              curl -s -X POST \
-                -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-                -H "Accept: application/json" \
-                -H "Content-Type: application/json" \
-                -d "{\"transition\":{\"id\":\"$DONE_TRANSITION_ID\"}}" \
-                "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$CHILD_ISSUE_KEY/transitions"
-              
-              echo "Successfully transitioned Jira issue $CHILD_ISSUE_KEY to 완료"
-            else
-              echo "::warning::Could not find '완료' transition for issue $CHILD_ISSUE_KEY"
-            fi
-          else
-            echo "::warning::No matching Jira issue found for branch: $BRANCH_NAME under parent: $PARENT_KEY"
-          fi
-        continue-on-error: true
-          
-
-      - name: Find and delete branch
-        run: |
-          # Get issue information
-          ISSUE_NUMBER="${{ github.event.issue.number }}"
-          BRANCH_NAME="${{ steps.issue-parser.outputs.issueparser_branchName }}"
-          PARENT_KEY="${{ steps.issue-parser.outputs.issueparser_parentKey }}"
-          
-          echo "Looking for branches with:"
-          echo "- Parent Key: $PARENT_KEY"
-          echo "- Branch Name: $BRANCH_NAME"
-          echo "- Issue Number: $ISSUE_NUMBER"
-          
-          # Find exact match: PARENT_KEY-BRANCH_NAME or PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME
-          EXACT_BRANCH_1="${PARENT_KEY}-${BRANCH_NAME}"
-          EXACT_BRANCH_2="${PARENT_KEY}-gh${ISSUE_NUMBER}-${BRANCH_NAME}"
-          
-          BRANCHES_DELETED=0
-          
-          # Check for exact branch name (PARENT_KEY-BRANCH_NAME)
-          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_1; then
-            echo "Found exact match branch: $EXACT_BRANCH_1"
-            git push origin --delete "$EXACT_BRANCH_1" && echo "Successfully deleted: $EXACT_BRANCH_1" || echo "Failed to delete: $EXACT_BRANCH_1"
-            BRANCHES_DELETED=1
-          fi
-          
-          # Check for GitHub issue tagged branch (PARENT_KEY-gh{ISSUE_NUMBER}-BRANCH_NAME)
-          if git show-ref --verify --quiet refs/remotes/origin/$EXACT_BRANCH_2; then
-            echo "Found GitHub tagged branch: $EXACT_BRANCH_2"
-            git push origin --delete "$EXACT_BRANCH_2" && echo "Successfully deleted: $EXACT_BRANCH_2" || echo "Failed to delete: $EXACT_BRANCH_2"
-            BRANCHES_DELETED=1
-          fi
-          
-          # If no exact matches found, report and continue
-          if [ $BRANCHES_DELETED -eq 0 ]; then
-            echo "::warning::No matching branch found for Parent Key: $PARENT_KEY, Branch Name: $BRANCH_NAME"
-            echo "Expected branches: $EXACT_BRANCH_1 or $EXACT_BRANCH_2"
-            echo "This issue will be closed without branch deletion."
-          else
-            echo "Branch deletion completed successfully."
-          fi
-
-      - name: Log completion
-        run: |
-          echo "Branch deletion workflow completed for issue #${{ github.event.issue.number }}"
