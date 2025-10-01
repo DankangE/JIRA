@@ -1,76 +1,46 @@
-name: Close Jira + Delete branch
+name: Close Jira Issue
 on:
   issues:
     types:
-      - closed
+      - closed 
+
 
 jobs:
-  close-and-clean:
+  close-issue:
+    name: Close Jira Issue
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Delete branch
+      - name: Extract Jira Issue Key from Title
+        id: extract-key
         run: |
-          ISSUE_NUMBER="${{ github.event.issue.number }}"
-          ISSUE_TITLE="${{ github.event.issue.title }}"
+          TITLE="${{ github.event.issue.title }}"
 
-          # 브랜치 네이밍 규칙 가정: issue-{번호} 또는 issue-{번호}-{설명}
-          BRANCH_1="issue-${ISSUE_NUMBER}"
-          BRANCH_2="issue-${ISSUE_NUMBER}-${ISSUE_TITLE// /-}"
+          # Jira 이슈 키 패턴 추출 (예: FE-123, BE-456 등)
+          ISSUE_KEY=$(echo "$TITLE" | grep -oE '[A-Z]+-[0-9]+' | head -1)
 
-          echo "Searching for possible branches: $BRANCH_1 or $BRANCH_2"
+          echo "JIRA_ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+          echo "Extracted Jira Issue Key: $ISSUE_KEY"
 
-          if git ls-remote --exit-code --heads origin "$BRANCH_1"; then
-            git push origin --delete "$BRANCH_1"
-            echo "Deleted $BRANCH_1"
-          elif git ls-remote --exit-code --heads origin "$BRANCH_2"; then
-            git push origin --delete "$BRANCH_2"
-            echo "Deleted $BRANCH_2"
-          else
-            echo "::warning::No branch found for issue #$ISSUE_NUMBER"
-          fi
-
-      - name: Transition Jira issue to 완료
-        run: |
-          ISSUE_TITLE="${{ github.event.issue.title }}"
-
-          # 이슈 제목이 지라 summary와 동일하다고 가정
-          RESPONSE=$(curl -s -X GET \
-            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-            -H "Accept: application/json" \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/search?jql=summary~\"$ISSUE_TITLE\"")
-
-          JIRA_KEY=$(echo "$RESPONSE" | jq -r '.issues[0].key // empty')
-
-          if [ -z "$JIRA_KEY" ]; then
-            echo "::warning::No Jira issue found for title: $ISSUE_TITLE"
-            exit 0
-          fi
-
-          echo "Found Jira issue: $JIRA_KEY"
-
-          TRANSITIONS=$(curl -s -X GET \
-            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-            -H "Accept: application/json" \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$JIRA_KEY/transitions")
-
-          DONE_ID=$(echo "$TRANSITIONS" | jq -r '.transitions[] | select(.name == "완료" or .name == "Done") | .id' | head -1)
-
-          if [ -n "$DONE_ID" ]; then
-            curl -s -X POST \
-              -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
-              -H "Content-Type: application/json" \
-              -d "{\"transition\":{\"id\":\"$DONE_ID\"}}" \
-              "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$JIRA_KEY/transitions"
-            echo "Jira issue $JIRA_KEY transitioned to 완료"
-          else
-            echo "::warning::No '완료' transition available for $JIRA_KEY"
-          fi
+      - name: Login to Jira
+        if: env.JIRA_ISSUE_KEY != ''
+        uses: atlassian/gajira-login@v3
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+
+      - name: Transition Jira Issue to Done
+        if: env.JIRA_ISSUE_KEY != ''
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ env.JIRA_ISSUE_KEY }}
+          transition: "완료"
+
+      - name: Add comment on GitHub issue
+        if: env.JIRA_ISSUE_KEY != ''
+        uses: actions-cool/issues-helper@v3
+        with:
+          actions: 'create-comment'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.issue.number }}
+          body: 'Jira Issue Closed: [${{ env.JIRA_ISSUE_KEY }}](${{ secrets.JIRA_BASE_URL }}/browse/${{ env.JIRA_ISSUE_KEY }})'
