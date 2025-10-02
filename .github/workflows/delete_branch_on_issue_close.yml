@@ -29,6 +29,11 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
 
+      - name: Delete branch
+        if: env.JIRA_ISSUE_KEY != ''
+        run: |
+          git push origin --delete ${{ env.JIRA_ISSUE_KEY }}
+
       - name: Transition Jira Issue to Done
         if: env.JIRA_ISSUE_KEY != ''
         uses: atlassian/gajira-transition@v3
