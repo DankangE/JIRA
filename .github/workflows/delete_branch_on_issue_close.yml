@@ -1,23 +1,28 @@
-name: Close Jira Issue
+name: Close Jira Issue and Delete Branch
 on:
   issues:
     types:
-      - closed 
-
+      - closed
 
 jobs:
   close-issue:
-    name: Close Jira Issue
+    name: Close Jira Issue and Delete Branch
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout main code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
       - name: Extract Jira Issue Key from Title
         id: extract-key
         run: |
           TITLE="${{ github.event.issue.title }}"
-
-          # Jira 이슈 키 패턴 추출 (예: FE-123, BE-456 등)
+          
+          # Jira 이슈 키 패턴 추출 (예: TEST-123 등)
           ISSUE_KEY=$(echo "$TITLE" | grep -oE '[A-Z]+-[0-9]+' | head -1)
-
+          
           echo "JIRA_ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
           echo "Extracted Jira Issue Key: $ISSUE_KEY"
 
@@ -29,10 +34,24 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
 
-      - name: Delete branch
-        if: env.JIRA_ISSUE_KEY != ''
+      - name: Find and delete branch
+        if: env.JIRA_ISSUE_KEY != '' && contains(github.event.issue.labels.*.name, 'feature')
         run: |
-          git push origin --delete ${{ env.JIRA_ISSUE_KEY }}
+          JIRA_KEY="${{ env.JIRA_ISSUE_KEY }}"
+          
+          echo "Looking for branches starting with: $JIRA_KEY"
+          
+          # Find branches that start with the Jira key
+          MATCHING_BRANCHES=$(git branch -r | grep -E "origin/${JIRA_KEY}-" | sed 's/origin\///' | sed 's/^ *//' | xargs)
+          
+          if [ -n "$MATCHING_BRANCHES" ]; then
+            for BRANCH in $MATCHING_BRANCHES; do
+              echo "Deleting branch: $BRANCH"
+              git push origin --delete "$BRANCH" && echo "Successfully deleted: $BRANCH" || echo "Failed to delete: $BRANCH"
+            done
+          else
+            echo "No matching branches found for Jira key: $JIRA_KEY"
+          fi
 
       - name: Transition Jira Issue to Done
         if: env.JIRA_ISSUE_KEY != ''

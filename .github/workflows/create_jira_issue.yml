@@ -16,6 +16,7 @@ jobs:
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
 
       - name: Checkout main code
+        if: contains(github.event.issue.labels.*.name, 'feature')
         uses: actions/checkout@v4
         with:
           ref: main
